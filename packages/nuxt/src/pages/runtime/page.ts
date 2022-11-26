@@ -42,6 +42,7 @@ export default defineComponent({
 
           const key = generateRouteKey(routeProps, props.pageKey)
           const done = nuxtApp.deferHydration()
+          const componentName = typeof key === "string" ? key : undefined;
 
           const hasTransition = !!(props.transition ?? routeProps.route.meta.pageTransition ?? defaultPageTransition)
           const transitionProps = hasTransition && _mergeTransitionProps([
@@ -53,9 +54,9 @@ export default defineComponent({
 
           return _wrapIf(Transition, hasTransition && transitionProps,
             wrapInKeepAlive(props.keepalive ?? routeProps.route.meta.keepalive ?? (defaultKeepaliveConfig as KeepAliveProps), h(Suspense, {
-              onPending: () => nuxtApp.callHook('page:start', routeProps.Component),
-              onResolve: () => { nextTick(() => nuxtApp.callHook('page:finish', routeProps.Component).finally(done)) }
-            }, { default: () => h(Component, { key, routeProps, pageKey: key, hasTransition } as {}) })
+                onPending: () => nuxtApp.callHook('page:start', routeProps.Component),
+                onResolve: () => { nextTick(() => nuxtApp.callHook('page:finish', routeProps.Component).finally(done)) }
+              }, { default: () => h(_getOrCreatePageWrapperComponent(componentName), { key, routeProps, pageKey: key, hasTransition } as {}) })
             )).default()
         }
       })
@@ -83,44 +84,58 @@ function _mergeTransitionProps (routeProps: TransitionProps[]): TransitionProps 
   return defu(..._props)
 }
 
-const Component = defineComponent({
-  // TODO: Type props
-  // eslint-disable-next-line vue/require-prop-types
-  props: ['routeProps', 'pageKey', 'hasTransition'],
-  setup (props) {
-    // Prevent reactivity when the page will be rerendered in a different suspense fork
-    // eslint-disable-next-line vue/no-setup-props-destructure
-    const previousKey = props.pageKey
-    // eslint-disable-next-line vue/no-setup-props-destructure
-    const previousRoute = props.routeProps.route
+const _pageWrapperMap: Map<string, ReturnType<typeof defineComponent>> = new Map();
+function _getOrCreatePageWrapperComponent(name: string | undefined) {
+  const nameInMap = name ?? "";
 
-    // Provide a reactive route within the page
-    const route = {} as RouteLocation
-    for (const key in props.routeProps.route) {
-      (route as any)[key] = computed(() => previousKey === props.pageKey ? props.routeProps.route[key] : previousRoute[key])
-    }
+  if (!_pageWrapperMap.has(nameInMap)) {
+    _pageWrapperMap.set(nameInMap, _createPageWrapperComponent(name));
+  }
 
-    provide('_route', reactive(route))
+  return _pageWrapperMap.get(nameInMap);
+}
+function _createPageWrapperComponent(name: string | undefined) {
+  return defineComponent({
+    // TODO: Type props
+    // eslint-disable-next-line vue/require-prop-types
+    name: name,
+    props: ['routeProps', 'pageKey', 'hasTransition'],
+    setup (props) {
+      // Prevent reactivity when the page will be rerendered in a different suspense fork
+      // eslint-disable-next-line vue/no-setup-props-destructure
+      const previousKey = props.pageKey
+      // eslint-disable-next-line vue/no-setup-props-destructure
+      const previousRoute = props.routeProps.route
 
-    let vnode: VNode
-    if (process.dev && process.client && props.hasTransition) {
-      onMounted(() => {
-        nextTick(() => {
-          if (['#comment', '#text'].includes(vnode?.el?.nodeName)) {
-            const filename = (vnode?.type as any).__file
-            console.warn(`[nuxt] \`${filename}\` does not have a single root node and will cause errors when navigating between routes.`)
-          }
-        })
-      })
-    }
-
-    return () => {
-      if (process.dev && process.client) {
-        vnode = h(props.routeProps.Component)
-        return vnode
+      // Provide a reactive route within the page
+      const route = {} as RouteLocation
+      for (const key in props.routeProps.route) {
+        (route as any)[key] = computed(() => previousKey === props.pageKey ? props.routeProps.route[key] : previousRoute[key])
       }
 
-      return h(props.routeProps.Component)
+      provide('_route', reactive(route))
+
+      let vnode: VNode
+      if (process.dev && process.client && props.hasTransition) {
+        onMounted(() => {
+          nextTick(() => {
+            if (['#comment', '#text'].includes(vnode?.el?.nodeName)) {
+              const filename = (vnode?.type as any).__file
+              console.warn(`[nuxt] \`${filename}\` does not have a single root node and will cause errors when navigating between routes.`)
+            }
+          })
+        })
+      }
+
+      return () => {
+        if (process.dev && process.client) {
+          vnode = h(props.routeProps.Component)
+          return vnode
+        }
+
+        return h(props.routeProps.Component)
+      }
     }
-  }
-})
+  })
+}
+
